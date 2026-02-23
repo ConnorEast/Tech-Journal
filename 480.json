@@ -1,0 +1,6 @@
+{
+    "serverEast": "vcenter.east.local",
+    "esxiEast": "192.168.3.206",
+    "datastore": "datastore2",
+    "base_snapshot": "Base"
+}
