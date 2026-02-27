@@ -174,7 +174,44 @@ function New-LinkedClone {
         return $null
     }
 }
+# ===== VM Start Script =====
+function StartVM{
+    param (
+        [string]$VMName
+    )
+    try {
+        if (-not $VMName) {
+            $vm = Select-VM
+            if (-not $vm) { return }
+        }
+        else {
+            $vm = Get-VM -Name $VMName -ErrorAction Stop
+        }
+        if ($vm.PowerState -eq "PoweredOn") {
+            Write-Host "[WARNING] VM '$($vm.Name)' is already powered on" -ForegroundColor Yellow
+            return $vm
+        }
 
+        Write-Host "[INFO] Starting VM '$($vm.Name)'..." -ForegroundColor Yellow
+        Start-VM -VM $vm -ErrorAction Stop | Out-Null
+        Write-Host "[OK] VM '$($vm.Name)' started!" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "[ERROR] Failed to start VM: $_" -ForegroundColor Red
+        return $null
+
+    }
+
+
+
+
+
+
+
+
+
+
+}
 # ===== Network Creation Script =====
 function Create-Network {
     param (
@@ -187,7 +224,7 @@ function Create-Network {
     if (-not $config) { return }
 
     try {
-        if (-not $ESXiHost) { ESXiHost = $config.esxiEast }
+        if (-not $ESXiHost) { $ESXiHost = $config.esxiEast }
         $vmhost = Get-VMHost -Name $ESXiHost -ErrorAction Stop
 
         if (-not $SwitchName) { $SwitchName = Read-Host "Please enter the name of the vSwitch to create" }
@@ -208,7 +245,7 @@ function Create-Network {
         $portgroup = New-VirtualPortGroup -VirtualSwitch $vswitch -Name $portgroupName -ErrorAction Stop
         Write-Host "[OK] Port group '$PortGroupName' created!" -ForegroundColor Green
         return $portgroup
-        }
+    }
     catch {
         Write-Host "[ERROR] Failed to create network: $_" -ForegroundColor Red
         return $null
@@ -253,17 +290,7 @@ function Set-VMNetwork {
     catch {
         Write-Host "[ERROR] Failed to set VM network: $_" -ForegroundColor Red
         return $null
-
-
-
-
-
     }
-
-
-
-
-
 }
 
 # ===== FULL CLONE FUNCTION =====
