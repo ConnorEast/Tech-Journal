@@ -175,7 +175,7 @@ function New-LinkedClone {
     }
 }
 # ===== VM Start Script =====
-function StartVM{
+function Invoke-StartVM{
     param (
         [string]$VMName
     )
@@ -201,17 +201,37 @@ function StartVM{
         return $null
 
     }
-
-
-
-
-
-
-
-
-
-
 }
+# ===== Turn off VM =====
+function Invoke-ShutdownVM {
+    param (
+        [string]$VMName
+    )
+    try {
+        if (-not $VMName) {
+            $vm = Select-VM
+            if (-not $vm) { return }
+        }
+        else {
+            $vm = Get-VM -Name $VMName -ErrorAction Stop
+        }
+        if ($vm.PowerState -eq "PoweredOff") {
+            Write-Host "[WARNING] VM '$($vm.Name)' is already powered off" -ForegroundColor Yellow
+            return $vm
+        }
+
+        Write-Host "[INFO] Shutting down VM '$($vm.Name)'..." -ForegroundColor Yellow
+        Shutdown-VMGuest -VM $vm -ErrorAction Stop | Out-Null
+        Write-Host "[OK] VM '$($vm.Name)' shut down!" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "[ERROR] Failed to shut down VM: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+
+
 # ===== Network Creation Script =====
 function Create-Network {
     param (

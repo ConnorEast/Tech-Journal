@@ -1,0 +1,6 @@
+---
+- name: ansible ping
+  hosts: vsphere-host
+  tasks:
+    - name: ping vsphere host
+      ansible.builtin.ping:

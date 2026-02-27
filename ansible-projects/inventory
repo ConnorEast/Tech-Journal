@@ -1,0 +1,4 @@
+[local]
+127.0.0.1 ansible_connection=local
+[vsphere-host]
+10.0.17.3 ansible_user=root
