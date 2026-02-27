@@ -174,6 +174,8 @@ function New-LinkedClone {
         return $null
     }
 }
+
+# ===== Network Creation Script =====
 function Create-Network {
     param (
         [string]$SwitchName,
@@ -185,7 +187,7 @@ function Create-Network {
     if (-not $config) { return }
 
     try {
-        if (-not ESXiHost) { ESXiHost = $config.esxiEast }
+        if (-not $ESXiHost) { ESXiHost = $config.esxiEast }
         $vmhost = Get-VMHost -Name $ESXiHost -ErrorAction Stop
 
         if (-not $SwitchName) { $SwitchName = Read-Host "Please enter the name of the vSwitch to create" }
@@ -204,13 +206,64 @@ function Create-Network {
 
         Write-Host "[Info] Deploying port group $PortGroupName..." -ForegroundColor Yellow
         $portgroup = New-VirtualPortGroup -VirtualSwitch $vswitch -Name $portgroupName -ErrorAction Stop
-        Write-Host "[OK] Port group '$PortGroupName' created!" -ForegroundColor
+        Write-Host "[OK] Port group '$PortGroupName' created!" -ForegroundColor Green
         return $portgroup
         }
     catch {
         Write-Host "[ERROR] Failed to create network: $_" -ForegroundColor Red
         return $null
     }
+}
+# ===== Setting VM Network Function =====
+function Set-VMNetwork {
+    param (
+        [string]$VMName,
+        [string]$NetworkName,
+        [int]$AdapterIndex = 0
+    )
+    try {
+        if (-not $VMName) {
+            $vm = Select-VM
+            if (-not $vm) { return }
+        }
+        else {
+            $vm = Get-VM -Name $VMName -ErrorAction Stop
+        }
+        if (-not $NetworkName) {
+            $NetworkName = Read-Host "Enter network name to connect VM to"
+            if ([string]::IsNullOrWhiteSpace($NetworkName)) {
+                Write-Host "[ERROR] Network name cannot be empty" -ForegroundColor Red
+                return
+            }
+        }
+        $adapters = Get-NetworkAdapter -VM $vm
+        if ($AdapterIndex -eq 0) {
+            Write-Host "[error] No network adapters found on VM '$($vm.Name)'" -ForegroundColor Red
+            return
+        }   
+        Write-Host "=== Listing Network Adapters for VM '$($vm.Name)' ===" -ForegroundColor cyan
+        for ($i = 0; $i -lt $adapters.Count; $i++) {
+            Write-Host "[$i] $(($adapters[$i]).NetworkName) - Current Network: $(($adapters[$i]).NetworkName)"
+        }
+        $targetAdapter = $adapters[$AdapterIndex]
+        Write-Host "[Info] Setting adapter [$AdapterIndex] '$($targetAdapter.Name)' to network '$NetworkName'..." -ForegroundColor Yellow
+        Set-NetworkAdapter -NetworkAdapter $targetAdapter -NetworkName $NetworkName -Confirm :$false -ErrorAction Stop | Out-Null
+        Write-Host "[OK] adapter has been set to network '$NetworkName'!" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "[ERROR] Failed to set VM network: $_" -ForegroundColor Red
+        return $null
+
+
+
+
+
+    }
+
+
+
+
+
 }
 
 # ===== FULL CLONE FUNCTION =====
