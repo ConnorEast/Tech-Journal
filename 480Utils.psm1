@@ -174,7 +174,44 @@ function New-LinkedClone {
         return $null
     }
 }
+function Create-Network {
+    param (
+        [string]$SwitchName,
+        [string]$PortGroupName,
+        [string]$ESXiHost
+    )
 
+    $config = Get-480Config
+    if (-not $config) { return }
+
+    try {
+        if (-not ESXiHost) { ESXiHost = $config.esxiEast }
+        $vmhost = Get-VMHost -Name $ESXiHost -ErrorAction Stop
+
+        if (-not $SwitchName) { $SwitchName = Read-Host "Please enter the name of the vSwitch to create" }
+
+        if (-not $PortGroupName) { $PortGroupName = Read-Host "Please enter the name of the port group to create" }
+        
+        $existingSwitch = Get-VirtualSwitch -VMHost $vmhost -Name $SwitchName -ErrorAction SilentlyContinue
+        if (-not $existingSwitch) {
+            Write-Host "[Info] Deploying vSwitch $SwitchName..." -ForegroundColor Yellow
+            $vswitch = New-VirtualSwitch -VMHost $vmhost -Name $SwitchName -ErrorAction Stop
+            write-Host "[OK] vSwitch '$SwitchName' created!" -ForegroundColor Green 
+        } else {
+            Write-Host "[OK] vSwitch '$SwitchName' already exists" -ForegroundColor Yellow
+            $vswitch = $existingSwitch
+        }
+
+        Write-Host "[Info] Deploying port group $PortGroupName..." -ForegroundColor Yellow
+        $portgroup = New-VirtualPortGroup -VirtualSwitch $vswitch -Name $portgroupName -ErrorAction Stop
+        Write-Host "[OK] Port group '$PortGroupName' created!" -ForegroundColor
+        return $portgroup
+        }
+    catch {
+        Write-Host "[ERROR] Failed to create network: $_" -ForegroundColor Red
+        return $null
+    }
+}
 
 # ===== FULL CLONE FUNCTION =====
 function New-FullClone {
