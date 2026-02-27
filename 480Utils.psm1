@@ -236,18 +236,18 @@ function Set-VMNetwork {
                 return
             }
         }
-        $adapters = Get-NetworkAdapter -VM $vm
-        if ($AdapterIndex -eq 0) {
+        $adapters = @(Get-NetworkAdapter -VM $vm)
+        if ($adapters.Count -eq 0) {
             Write-Host "[error] No network adapters found on VM '$($vm.Name)'" -ForegroundColor Red
             return
         }   
         Write-Host "=== Listing Network Adapters for VM '$($vm.Name)' ===" -ForegroundColor cyan
         for ($i = 0; $i -lt $adapters.Count; $i++) {
-            Write-Host "[$i] $(($adapters[$i]).NetworkName) - Current Network: $(($adapters[$i]).NetworkName)"
+            Write-Host "[$i] $(($adapters[$i]).Name) - Current Network: $(($adapters[$i]).NetworkName)"
         }
         $targetAdapter = $adapters[$AdapterIndex]
         Write-Host "[Info] Setting adapter [$AdapterIndex] '$($targetAdapter.Name)' to network '$NetworkName'..." -ForegroundColor Yellow
-        Set-NetworkAdapter -NetworkAdapter $targetAdapter -NetworkName $NetworkName -Confirm :$false -ErrorAction Stop | Out-Null
+        Set-NetworkAdapter -NetworkAdapter $targetAdapter -NetworkName $NetworkName -Confirm:$false -ErrorAction Stop | Out-Null
         Write-Host "[OK] adapter has been set to network '$NetworkName'!" -ForegroundColor Green
     }
     catch {
