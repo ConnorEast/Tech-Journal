@@ -1,5 +1,3 @@
-# 480Utils.psm1 - PowerShell Module for VM Cloning Operations
-
 # ===== CONFIGURATION FUNCTION =====
 # this section of the script collects the information from the 480.json file and returns it as a PowerShell object. this is useful as it means it is accessible to all other functions within this "module skeleton"
 function Get-480Config {
@@ -24,6 +22,7 @@ function Get-480Config {
         return $null
     }
 }
+
 # ===== VCENTER CONNECTION FUNCTION =====
 # This one is simple. It runs the config function to get the needed data before parsing it to a connection function. This function allows us to log in to vcenter and is required for the functionality of all active deployments. It also checks if we are already connected to avoid unnecessary reconnections, and it ignores certificate warnings for smoother operation.
 function Connect-480VIServer {
@@ -174,8 +173,9 @@ function New-LinkedClone {
         return $null
     }
 }
+
 # ===== VM Start Script =====
-function Invoke-StartVM{
+function Invoke-StartVM {
     param (
         [string]$VMName
     )
@@ -195,14 +195,17 @@ function Invoke-StartVM{
         Write-Host "[INFO] Starting VM '$($vm.Name)'..." -ForegroundColor Yellow
         Start-VM -VM $vm -ErrorAction Stop | Out-Null
         Write-Host "[OK] VM '$($vm.Name)' started!" -ForegroundColor Green
+        return $vm
     }
     catch {
         Write-Host "[ERROR] Failed to start VM: $_" -ForegroundColor Red
         return $null
-
     }
 }
+
 # ===== Turn off VM =====
+# FIX: Changed Shutdown-VMGuest to Stop-VMGuest. Shutdown-VMGuest is not a valid PowerCLI cmdlet.
+# Stop-VMGuest sends a graceful shutdown signal via VMware Tools (same behaviour, correct cmdlet).
 function Invoke-ShutdownVM {
     param (
         [string]$VMName
@@ -221,8 +224,9 @@ function Invoke-ShutdownVM {
         }
 
         Write-Host "[INFO] Shutting down VM '$($vm.Name)'..." -ForegroundColor Yellow
-        Shutdown-VMGuest -VM $vm -ErrorAction Stop | Out-Null
-        Write-Host "[OK] VM '$($vm.Name)' shut down!" -ForegroundColor Green
+        Stop-VMGuest -VM $vm -Confirm:$false -ErrorAction Stop | Out-Null
+        Write-Host "[OK] VM '$($vm.Name)' shutdown initiated!" -ForegroundColor Green
+        return $vm
     }
     catch {
         Write-Host "[ERROR] Failed to shut down VM: $_" -ForegroundColor Red
@@ -231,8 +235,9 @@ function Invoke-ShutdownVM {
 }
 
 
-
 # ===== Network Creation Script =====
+# FIX: Added existence check for port group before creating it, matching the existing vSwitch check.
+# Without this, re-running the function would throw a duplicate port group error.
 function Create-Network {
     param (
         [string]$SwitchName,
@@ -250,20 +255,29 @@ function Create-Network {
         if (-not $SwitchName) { $SwitchName = Read-Host "Please enter the name of the vSwitch to create" }
 
         if (-not $PortGroupName) { $PortGroupName = Read-Host "Please enter the name of the port group to create" }
-        
+       
         $existingSwitch = Get-VirtualSwitch -VMHost $vmhost -Name $SwitchName -ErrorAction SilentlyContinue
         if (-not $existingSwitch) {
-            Write-Host "[Info] Deploying vSwitch $SwitchName..." -ForegroundColor Yellow
+            Write-Host "[INFO] Deploying vSwitch $SwitchName..." -ForegroundColor Yellow
             $vswitch = New-VirtualSwitch -VMHost $vmhost -Name $SwitchName -ErrorAction Stop
-            write-Host "[OK] vSwitch '$SwitchName' created!" -ForegroundColor Green 
-        } else {
+            Write-Host "[OK] vSwitch '$SwitchName' created!" -ForegroundColor Green
+        }
+        else {
             Write-Host "[OK] vSwitch '$SwitchName' already exists" -ForegroundColor Yellow
             $vswitch = $existingSwitch
         }
 
-        Write-Host "[Info] Deploying port group $PortGroupName..." -ForegroundColor Yellow
-        $portgroup = New-VirtualPortGroup -VirtualSwitch $vswitch -Name $portgroupName -ErrorAction Stop
-        Write-Host "[OK] Port group '$PortGroupName' created!" -ForegroundColor Green
+        $existingPortGroup = Get-VirtualPortGroup -VirtualSwitch $vswitch -Name $PortGroupName -ErrorAction SilentlyContinue
+        if (-not $existingPortGroup) {
+            Write-Host "[INFO] Deploying port group $PortGroupName..." -ForegroundColor Yellow
+            $portgroup = New-VirtualPortGroup -VirtualSwitch $vswitch -Name $PortGroupName -ErrorAction Stop
+            Write-Host "[OK] Port group '$PortGroupName' created!" -ForegroundColor Green
+        }
+        else {
+            Write-Host "[OK] Port group '$PortGroupName' already exists" -ForegroundColor Yellow
+            $portgroup = $existingPortGroup
+        }
+
         return $portgroup
     }
     catch {
@@ -271,7 +285,9 @@ function Create-Network {
         return $null
     }
 }
+
 # ===== Setting VM Network Function =====
+# FIX: Corrected "[error]" tag to "[ERROR]" for consistency with the rest of the module.
 function Set-VMNetwork {
     param (
         [string]$VMName,
@@ -295,17 +311,17 @@ function Set-VMNetwork {
         }
         $adapters = @(Get-NetworkAdapter -VM $vm)
         if ($adapters.Count -eq 0) {
-            Write-Host "[error] No network adapters found on VM '$($vm.Name)'" -ForegroundColor Red
+            Write-Host "[ERROR] No network adapters found on VM '$($vm.Name)'" -ForegroundColor Red
             return
-        }   
-        Write-Host "=== Listing Network Adapters for VM '$($vm.Name)' ===" -ForegroundColor cyan
+        }
+        Write-Host "=== Listing Network Adapters for VM '$($vm.Name)' ===" -ForegroundColor Cyan
         for ($i = 0; $i -lt $adapters.Count; $i++) {
             Write-Host "[$i] $(($adapters[$i]).Name) - Current Network: $(($adapters[$i]).NetworkName)"
         }
         $targetAdapter = $adapters[$AdapterIndex]
-        Write-Host "[Info] Setting adapter [$AdapterIndex] '$($targetAdapter.Name)' to network '$NetworkName'..." -ForegroundColor Yellow
+        Write-Host "[INFO] Setting adapter [$AdapterIndex] '$($targetAdapter.Name)' to network '$NetworkName'..." -ForegroundColor Yellow
         Set-NetworkAdapter -NetworkAdapter $targetAdapter -NetworkName $NetworkName -Confirm:$false -ErrorAction Stop | Out-Null
-        Write-Host "[OK] adapter has been set to network '$NetworkName'!" -ForegroundColor Green
+        Write-Host "[OK] Adapter has been set to network '$NetworkName'!" -ForegroundColor Green
     }
     catch {
         Write-Host "[ERROR] Failed to set VM network: $_" -ForegroundColor Red
@@ -314,6 +330,8 @@ function Set-VMNetwork {
 }
 
 # ===== FULL CLONE FUNCTION =====
+# FIX: Added -DeletePermanently to the happy-path linked clone removal so disk files are also cleaned up,
+# matching the catch block behaviour. Without this the temp linked clone's vmdk files were left on the datastore.
 function New-FullClone {
     param (
         [string]$VMName,
@@ -388,7 +406,7 @@ function New-FullClone {
         $newvm | New-Snapshot -Name "Base" -ErrorAction Stop
 
         Write-Host "[INFO] Cleaning up temporary clone..." -ForegroundColor Yellow
-        $linkedvm | Remove-VM -Confirm:$false -ErrorAction Stop
+        $linkedvm | Remove-VM -DeletePermanently -Confirm:$false -ErrorAction Stop
 
         Write-Host "[OK] Full clone '$CloneName' created!" -ForegroundColor Green
         return $newvm
@@ -401,6 +419,83 @@ function New-FullClone {
             Write-Host "[INFO] Cleaning up temporary clone..." -ForegroundColor Yellow
             $tempClone | Remove-VM -DeletePermanently -Confirm:$false -ErrorAction SilentlyContinue
         }
+        return $null
+    }
+}
+
+# ===== GET VM IP ADDRESS FUNCTION =====
+# Retrieves the IP address(es) of a VM via VMware Tools guest info.
+# The VM must be powered on and have VMware Tools running for this to work.
+# An optional -WaitForIP switch will poll until an IP is reported, useful immediately after boot.
+function Get-VMIPAddress {
+    param (
+        [string]$VMName,
+        [switch]$WaitForIP,
+        [int]$TimeoutSeconds = 120
+    )
+
+    try {
+        if (-not $VMName) {
+            $vm = Select-VM
+            if (-not $vm) { return }
+        }
+        else {
+            $vm = Get-VM -Name $VMName -ErrorAction Stop
+        }
+
+        if ($vm.PowerState -ne "PoweredOn") {
+            Write-Host "[ERROR] VM '$($vm.Name)' is not powered on. Start the VM first." -ForegroundColor Red
+            return $null
+        }
+
+        if ($WaitForIP) {
+            Write-Host "[INFO] Waiting for VMware Tools to report an IP (timeout: ${TimeoutSeconds}s)..." -ForegroundColor Yellow
+            $elapsed = 0
+            $interval = 5
+
+            while ($elapsed -lt $TimeoutSeconds) {
+                $vmView = $vm | Get-View
+                $ip = $vmView.Guest.IpAddress
+
+                if (-not [string]::IsNullOrWhiteSpace($ip)) {
+                    Write-Host "[OK] VM '$($vm.Name)' IP address: $ip" -ForegroundColor Green
+                    return $ip
+                }
+
+                Start-Sleep -Seconds $interval
+                $elapsed += $interval
+                $vm = Get-VM -Name $vm.Name  # refresh the VM object
+                Write-Host "[INFO] Still waiting... ($elapsed/${TimeoutSeconds}s)" -ForegroundColor Yellow
+            }
+
+            Write-Host "[ERROR] Timed out waiting for IP address on VM '$($vm.Name)'" -ForegroundColor Red
+            return $null
+        }
+        else {
+            # Immediate check via the VM's guest info view
+            $vmView = $vm | Get-View
+            $ip = $vmView.Guest.IpAddress
+
+            if ([string]::IsNullOrWhiteSpace($ip)) {
+                Write-Host "[WARNING] No IP reported for '$($vm.Name)'. VMware Tools may not be running or the VM may still be booting." -ForegroundColor Yellow
+                Write-Host "[TIP] Use -WaitForIP to poll until an address is available." -ForegroundColor Cyan
+                return $null
+            }
+
+            Write-Host "[OK] VM '$($vm.Name)' IP address: $ip" -ForegroundColor Green
+
+            # Also report all IPs across all NICs if there are multiple
+            $allIPs = $vmView.Guest.Net | ForEach-Object { $_.IpAddress } | Where-Object { $_ -ne $null }
+            if ($allIPs.Count -gt 1) {
+                Write-Host "[INFO] All reported addresses:" -ForegroundColor Cyan
+                $allIPs | ForEach-Object { Write-Host "  - $_" }
+            }
+
+            return $ip
+        }
+    }
+    catch {
+        Write-Host "[ERROR] Failed to get IP address: $_" -ForegroundColor Red
         return $null
     }
 }
