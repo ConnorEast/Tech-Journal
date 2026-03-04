@@ -2,3 +2,7 @@
 127.0.0.1 ansible_connection=local
 [vsphere-host]
 10.0.17.3 ansible_user=root
+[vyos]
+10.0.17.103 hostname=blueX-fw wan_ip=10.0.17.200 lan_ip=10.0.5.2 lan=10.0.5.0/24 name_server=10.0.17.4 gateway=10.0.17.2
+[vyos:vars]
+ansible_python_interpreter=/usr/bin/python3
