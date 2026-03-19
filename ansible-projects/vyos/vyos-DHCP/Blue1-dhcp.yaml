@@ -1,28 +1,48 @@
 ---
+- name: Prompt and register fw-blue1
+  hosts: localhost
+  gather_facts: false
+  vars_prompt:
+    - name: vyos_password
+      prompt: "Enter VyOS SSH password"
+      private: true
+
+  tasks:
+    - name: Register fw-blue1 with prompted password
+      add_host:
+        name: fw-blue1
+        groups: vyos_dynamic
+        ansible_host: 10.0.5.2
+        ansible_user: vyos
+        ansible_password: "{{ vyos_password }}"
+        ansible_become_password: "{{ vyos_password }}"
+        ansible_network_os: vyos
+        ansible_connection: network_cli
+        ansible_host_key_checking: false
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
 - name: Configure DHCP Server on fw-blue1
-  hosts: fw-blue1
+  hosts: vyos_dynamic
   gather_facts: false
 
   tasks:
     - name: Verify connectivity - show version
-      vyos.vyos.vyos_command:
-      commands:
-        - show version
+      vyos_command:
+        commands:
+          - show version
       register: version_output
 
-    - name: print version
+    - name: Print version output
       debug:
         var: version_output.stdout_lines
-    
-    - name: Configure DHCP
-      vyos.vyos.vyos_config:
+
+    - name: Configure DHCP server on fw-blue1
+      vyos_config:
         lines:
-          - set service dhcp-server global-parameters "local-address 10.0.5.2"
-          - set service dhcp-server shared-network-name BLUE1 authoritative
           - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 default-router 10.0.5.2
           - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 domain-name blue1.local
           - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 lease 86400
           - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 name-server 10.0.5.5
-          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 range BLUE1--POOL start 10.0.5.75
-          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 range BLUE1--POOL stop 10.0.5.125
+          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 range BLUE1POOL start 10.0.5.75
+          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 range BLUE1POOL stop 10.0.5.125
         save: true
