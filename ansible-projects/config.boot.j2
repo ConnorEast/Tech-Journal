@@ -1,0 +1,90 @@
+interfaces {
+    ethernet eth0 {
+        address {{ lan_ip }}/24
+    }
+    ethernet eth1 {
+        address {{ wan_ip }}/24
+    }
+    loopback lo {
+    }
+}
+nat {
+    source {
+        rule 10 {
+            outbound-interface eth1
+            source{
+                address {{ lan }}
+            }
+            translation{
+                address masquerade
+            }
+        }
+    }
+}
+protocols {
+    static {
+        route 0.0.0.0/0 {
+            next-hop {{ gateway }}
+        }
+    }
+}
+service {
+    dhcp-server {
+        global-parameters "local-address {{ lan_ip }}"
+        shared-network-name {{ hostname }}-POOL {
+            authoritative
+            subnet {{ lan }} {
+                default-router {{ lan_ip }}
+                domain-name {{ hostname }}.local
+                lease 86400
+                name-server {{ name_server }}
+                range {{ hostname }}--POOL {
+                    start {{ dhcp_start }}
+                    stop {{ dhcp_stop }}
+                }
+            }
+        }
+    }
+    dns {
+        forwarding {
+            allow-from {{ lan }}
+            listen-address {{ lan_ip }}
+            name-server {{ name_server }}
+            system
+        }
+    }
+    ssh {
+        listen-address 0.0.0.0
+    }
+}
+system {
+    config-management {
+        commit-revisions 100
+    }
+    conntrack {
+        modules {
+            ftp
+            h323
+            nfs
+            pptp
+            sip
+            sqlnet
+            tftp
+        }
+    }
+    console {
+        device ttyS0 {
+            speed 115200
+        }
+    }
+    host-name {{ hostname }}
+    login {
+        user vyos {
+            authentication {
+                encrypted-password {{ password_hash }}
+                plaintext-password ""
+            }
+        }
+    }
+    name-server {{ name_server }}
+}

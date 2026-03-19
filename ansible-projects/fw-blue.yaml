@@ -1,0 +1,63 @@
+---
+- name: Get VyOS VM IP from vCenter
+  hosts: localhost
+  gather_facts: no
+  vars_prompt:
+    - name: vcenter_password
+      prompt: "Enter vCenter password"
+      private: true
+    - name: password
+      prompt: "Enter new VyOS password"
+      private: true
+
+  tasks:
+    - name: Get VM info from vCenter
+      community.vmware.vmware_guest_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ vcenter_datacenter | default('Datacenter') }}"
+        name: "{{ target_vm }}"
+        validate_certs: "{{ vcenter_validate_certs }}"
+      register: vm_info
+
+    - name: Show discovered VM IP
+      debug:
+        msg: "Found VM '{{ target_vm }}' with IP: {{ vm_info.instance.ipv4 }}"
+
+    - name: Set discovered IP as fact for next play
+      add_host:
+        name: "{{ vm_info.instance.ipv4 }}"
+        groups: vyos_dynamic
+        ansible_host: "{{ vm_info.instance.ipv4 }}"
+        ansible_network_os: vyos
+        ansible_connection: network_cli
+        ansible_user: vyos
+        # Pull host vars from inventory for the target VM
+        hostname: "{{ hostvars[target_vm]['hostname'] }}"
+        wan_ip: "{{ hostvars[target_vm]['wan_ip'] }}"
+        lan_ip: "{{ hostvars[target_vm]['lan_ip'] }}"
+        lan: "{{ hostvars[target_vm]['lan'] }}"
+        name_server: "{{ hostvars[target_vm]['name_server'] }}"
+        gateway: "{{ hostvars[target_vm]['gateway'] }}"
+        dhcp_start: "{{ hostvars[target_vm]['dhcp_start'] }}"
+        dhcp_stop: "{{ hostvars[target_vm]['dhcp_stop'] }}"
+        password_hash: "{{ password | password_hash('sha512') }}"
+
+- name: Deploy VyOS Config
+  hosts: vyos_dynamic
+  gather_facts: no
+  become: yes
+
+  tasks:
+    - name: Load config from template
+      template:
+        src: config.boot.j2
+        dest: /config/config.boot
+        mode: "0775"
+        owner: root
+        group: vyattacfg
+
+    - name: Reboot to apply config
+      become: yes
+      shell: nohup bash -c "/usr/bin/sleep 5 && /usr/sbin/shutdown -r now" >/dev/null 2>&1 &

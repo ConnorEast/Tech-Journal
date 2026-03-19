@@ -1,0 +1,37 @@
+all:
+  vars:
+    # vCenter connection settings
+    vcenter_hostname: "10.0.17.3"
+    vcenter_username: "administrator@vsphere.local"
+    vcenter_validate_certs: false
+
+    # Target VM to configure - override at runtime with: -e "target_vm=blueX-fw"
+    target_vm: "blueX-fw"
+
+  children:
+    local:
+      hosts:
+        localhost:
+          ansible_connection: local
+
+    vsphere_host:
+      hosts:
+        10.0.17.3:
+          ansible_user: root
+
+    vyos:
+      vars:
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_network_os: vyos
+        ansible_connection: network_cli
+        ansible_user: vyos
+      hosts:
+        blueX-fw:
+          hostname: blueX-fw
+          wan_ip: 10.0.17.200
+          lan_ip: 10.0.5.2
+          lan: 10.0.5.0/24
+          name_server: 10.0.17.4
+          gateway: 10.0.17.2
+          dhcp_start: 10.0.5.75
+          dhcp_stop: 10.0.5.125
