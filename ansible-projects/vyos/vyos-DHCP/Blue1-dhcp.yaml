@@ -1,0 +1,28 @@
+---
+- name: Configure DHCP Server on fw-blue1
+  hosts: fw-blue1
+  gather_facts: false
+
+  tasks:
+    - name: Verify connectivity - show version
+      vyos.vyos.vyos_command:
+      commands:
+        - show version
+      register: version_output
+
+    - name: print version
+      debug:
+        var: version_output.stdout_lines
+    
+    - name: Configure DHCP
+      vyos.vyos.vyos_config:
+        lines:
+          - set service dhcp-server global-parameters "local-address 10.0.5.2"
+          - set service dhcp-server shared-network-name BLUE1 authoritative
+          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 default-router 10.0.5.2
+          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 domain-name blue1.local
+          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 lease 86400
+          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 name-server 10.0.5.5
+          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 range BLUE1--POOL start 10.0.5.75
+          - set service dhcp-server shared-network-name BLUE1 subnet 10.0.5.0/24 range BLUE1--POOL stop 10.0.5.125
+        save: true

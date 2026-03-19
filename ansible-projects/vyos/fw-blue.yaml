@@ -1,3 +1,4 @@
+---
 - name: Vyos Network Config
   hosts: vyos
   gather_facts: no
@@ -11,7 +12,6 @@
       set_fact:
         password_hash: "{{ password | password_hash('sha512') }}"
     - name: Load Config from template
-      become: yes
       template:
         src: config.boot.j2
         dest: /config/config.boot
@@ -19,5 +19,4 @@
         owner: root
         group: vyattacfg
     - name: Bounce and end
-      become: yes
       shell: nohup bash -c "/usr/bin/sleep 5 && /usr/sbin/shutdown -r now" >/dev/null 2>&1 &

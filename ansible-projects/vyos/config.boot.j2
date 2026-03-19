@@ -12,10 +12,10 @@ nat {
     source {
         rule 10 {
             outbound-interface eth1
-            source{
+            source {
                 address {{ lan }}
             }
-            translation{
+            translation {
                 address masquerade
             }
         }
@@ -65,12 +65,30 @@ system {
     login {
         user vyos {
             authentication {
-                encrypted-password {{ password_hash }}
+                encrypted-password "{{ password_hash }}"
                 plaintext-password ""
             }
         }
     }
     name-server {{ name_server }}
+    ntp {
+        server 0.pool.ntp.org {
+        }
+        server 1.pool.ntp.org {
+        }
+    }
+    syslog {
+        global {
+            facility all {
+                level info
+            }
+            facility protocols {
+                level debug
+            }
+        }
+    time-zone UTC
+    }
+}
 
 
 
