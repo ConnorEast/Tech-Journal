@@ -1,0 +1,76 @@
+---
+- name: Configure deployer user, hostname, and static IP (Rocky Linux)
+  hosts: all
+  gather_facts: yes
+  become: yes
+
+  vars:
+    deployer_user: deployer
+    deployer_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHbyK5txNlRI6Q5ROalOv9UYnBV47VZNuFUrf6jbfmvY deployer@480"
+    static_netmask: "24"
+    static_gateway: "10.0.5.2"
+    dns_servers: "10.0.5.2"
+
+  tasks:
+
+    # -------------------------------------------------------
+    # 1. Add public key for deployer user
+    # -------------------------------------------------------
+    - name: Ensure deployer user exists
+      ansible.builtin.user:
+        name: "{{ deployer_user }}"
+        shell: /bin/bash
+        create_home: yes
+        state: present
+
+    - name: Add public key for deployer
+      ansible.posix.authorized_key:
+        user: "{{ deployer_user }}"
+        state: present
+        key: "{{ deployer_pubkey }}"
+
+    # -------------------------------------------------------
+    # 2. Sudoers drop-in for passwordless root elevation
+    # -------------------------------------------------------
+    - name: Create sudoers drop-in for deployer (no password)
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/deployer
+        content: "deployer ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    # -------------------------------------------------------
+    # 3. Change hostname
+    # -------------------------------------------------------
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ new_hostname }}"
+
+    - name: Update /etc/hosts with new hostname
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1'
+        line: "127.0.1.1   {{ new_hostname }}"
+
+    # -------------------------------------------------------
+    # 4. Change DHCP to static IP via nmcli (Rocky/RHEL)
+    # -------------------------------------------------------
+    - name: Get active network connection name
+      ansible.builtin.shell: "nmcli -t -f NAME,DEVICE con show --active | head -1 | cut -d: -f1"
+      register: active_conn
+      changed_when: false
+
+    - name: Set static IP address
+      ansible.builtin.command: >
+        nmcli con mod "{{ active_conn.stdout }}"
+        ipv4.addresses {{ static_ip }}/{{ static_netmask }}
+        ipv4.gateway {{ static_gateway }}
+        ipv4.dns {{ dns_servers }}
+        ipv4.method manual
+
+    - name: Reload connection to apply static IP
+      ansible.builtin.command: nmcli con up "{{ active_conn.stdout }}"
+      async: 10
+      poll: 0
