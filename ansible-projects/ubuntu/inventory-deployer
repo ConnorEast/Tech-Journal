@@ -1,0 +1,8 @@
+[deployer-targets]
+ubuntu-01 ansible_host=10.0.5.78 static_ip=10.0.5.30 new_hostname=blueU01
+ubuntu-02 ansible_host=10.0.5.79 static_ip=10.0.5.31 new_hostname=blueU02
+
+
+[deployer-targets:vars]
+ansible_user=root
+ansible_python_interpreter="/usr/bin/python3"
