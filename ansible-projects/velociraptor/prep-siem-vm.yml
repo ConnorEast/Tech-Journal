@@ -1,0 +1,81 @@
+---
+# Run this against the SIEM VM while it still has its DHCP IP.
+#   ansible-playbook -i inventory.yaml prep-siem-vm.yml --limit siem_bootstrap
+#
+# After this play completes the VM will have:
+#   - Static IP  10.0.5.5 / gw 10.0.5.2
+#   - Hostname   blue-siem
+#   - deployer user with the shared SSH public key + passwordless sudo
+#
+# The SSH session will drop when nmcli brings the connection back up; that is expected.
+
+- name: Prep SIEM VM - deployer user, hostname, static IP (Rocky Linux)
+  hosts: siem_bootstrap
+  gather_facts: yes
+  become: yes
+
+  vars:
+    deployer_user: deployer
+    deployer_pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHbyK5txNlRI6Q5ROalOv9UYnBV47VZNuFUrf6jbfmvY deployer@480"
+    static_netmask: "24"
+    static_gateway: "10.0.5.2"
+    dns_server: "10.0.5.2"
+
+  tasks:
+
+    # --- 1. deployer user + SSH key ---
+    - name: Ensure deployer user exists
+      ansible.builtin.user:
+        name: "{{ deployer_user }}"
+        shell: /bin/bash
+        create_home: yes
+        state: present
+
+    - name: Add public key for deployer
+      ansible.posix.authorized_key:
+        user: "{{ deployer_user }}"
+        state: present
+        key: "{{ deployer_pubkey }}"
+
+    # --- 2. Passwordless sudo ---
+    - name: Create sudoers drop-in for deployer
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/deployer
+        content: "deployer ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    # --- 3. Hostname ---
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ new_hostname }}"
+
+    - name: Update /etc/hosts with new hostname
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.0\.1\s+localhost'
+        line: "127.0.0.1   localhost localhost.localdomain {{ new_hostname }}"
+
+    # --- 4. Static IP via nmcli (Rocky/RHEL) ---
+    # Use the interface from gathered facts to look up the connection name directly.
+    # Avoids colon-parsing issues with -t output when the connection name contains colons.
+    - name: Get connection name for the active interface
+      ansible.builtin.shell: "nmcli -g GENERAL.CONNECTION device show {{ ansible_default_ipv4.interface }}"
+      register: active_conn
+      changed_when: false
+
+    - name: Set static IP, gateway, and DNS
+      ansible.builtin.shell: >
+        nmcli con mod "{{ active_conn.stdout }}"
+        ipv4.addresses {{ static_ip }}/{{ static_netmask }}
+        ipv4.gateway {{ static_gateway }}
+        ipv4.dns {{ dns_server }}
+        ipv4.method manual
+
+    # async + poll 0: fire-and-forget so connection drop does not fail the play
+    - name: Bring connection back up with new static IP (connection will drop - this is expected)
+      ansible.builtin.shell: nmcli con up "{{ active_conn.stdout }}"
+      async: 10
+      poll: 0

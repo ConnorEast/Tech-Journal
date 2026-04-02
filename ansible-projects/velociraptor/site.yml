@@ -1,0 +1,6 @@
+---
+# Master playbook - installs server then agents.
+#   ansible-playbook -i inventory.yaml site.yml
+
+- import_playbook: install-velociraptor-server.yml
+- import_playbook: install-velociraptor-agent.yml

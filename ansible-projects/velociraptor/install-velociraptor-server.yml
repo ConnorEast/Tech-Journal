@@ -1,0 +1,237 @@
+---
+# Installs Velociraptor server on blue-siem (10.0.5.5 - Rocky Linux).
+#
+#   ansible-playbook -i inventory.yaml install-velociraptor-server.yml
+#
+# After completion:
+#   GUI:  https://10.0.5.5:8889   user: admin   pass: see vars below
+#   Agents connect to: https://10.0.5.5:8000
+#
+# Client config is fetched to /tmp/velociraptor-client.config.yaml
+# on the Ansible controller for use by the agent playbook.
+
+- name: Install Velociraptor server on blue-siem
+  hosts: velociraptor_server
+  gather_facts: yes
+  become: yes
+
+  vars:
+    velo_version: "v0.76.1"
+    velo_release: "v0.76"
+    velo_binary_url: "https://github.com/Velocidex/velociraptor/releases/download/{{ velo_release }}/velociraptor-{{ velo_version }}-linux-amd64-musl"
+    velo_binary: "/usr/local/bin/velociraptor"
+    velo_config_dir: "/etc/velociraptor"
+    velo_server_config: "{{ velo_config_dir }}/server.config.yaml"
+    velo_client_config: "{{ velo_config_dir }}/client.config.yaml"
+    velo_datastore: "/var/lib/velociraptor"
+    velo_log_dir: "/var/log/velociraptor"
+    velo_server_ip: "10.0.5.5"
+    velo_frontend_port: 8000
+    velo_gui_port: 8889
+    velo_admin_user: "admin"
+    velo_admin_password: "VeloAdmin123!"
+    
+  tasks:
+
+    # ----------------------------------------------------------------
+    # 1. Prerequisites + firewall
+    # ----------------------------------------------------------------
+    - name: Install prerequisites
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - firewalld
+          - expect
+        state: present
+
+    - name: Ensure firewalld is running
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Open Velociraptor ports
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      loop:
+        - "{{ velo_frontend_port }}/tcp"
+        - "{{ velo_gui_port }}/tcp"
+
+    - name: Set SELinux to permissive
+      ansible.posix.selinux:
+        policy: targeted
+        state: permissive
+
+    # ----------------------------------------------------------------
+    # 2. Create directories (owned by root - service runs as root)
+    # ----------------------------------------------------------------
+    - name: Create required directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      loop:
+        - "{{ velo_config_dir }}"
+        - "{{ velo_datastore }}"
+        - "{{ velo_log_dir }}"
+
+    # ----------------------------------------------------------------
+    # 3. Download Velociraptor binary
+    # ----------------------------------------------------------------
+    - name: Download Velociraptor binary (musl - Rocky/RHEL)
+      ansible.builtin.get_url:
+        url: "{{ velo_binary_url }}"
+        dest: "{{ velo_binary }}"
+        mode: "0755"
+        force: no
+
+    # ----------------------------------------------------------------
+    # 4. Generate server config
+    # velociraptor config generate (no flags) outputs a complete
+    # self-signed config to stdout. We then patch the IP and paths.
+    # ----------------------------------------------------------------
+    - name: Remove any broken existing config
+      ansible.builtin.file:
+        path: "{{ velo_server_config }}"
+        state: absent
+
+    - name: Generate self-signed server config
+      ansible.builtin.shell: >
+        {{ velo_binary }} config generate > {{ velo_server_config }}
+
+    - name: Patch frontend hostname to server IP
+      ansible.builtin.replace:
+        path: "{{ velo_server_config }}"
+        regexp: 'hostname:.*'
+        replace: 'hostname: {{ velo_server_ip }}'
+
+    - name: Patch client server URL to server IP
+      ansible.builtin.replace:
+        path: "{{ velo_server_config }}"
+        regexp: '- https://localhost:\d+/'
+        replace: '- https://{{ velo_server_ip }}:{{ velo_frontend_port }}/'
+
+    - name: Patch datastore location
+      ansible.builtin.replace:
+        path: "{{ velo_server_config }}"
+        regexp: '^  location:.*'
+        replace: '  location: {{ velo_datastore }}'
+
+    - name: Patch filestore directory
+      ansible.builtin.replace:
+        path: "{{ velo_server_config }}"
+        regexp: 'filestore_directory:.*'
+        replace: 'filestore_directory: {{ velo_datastore }}'
+
+    - name: Patch log output directory
+      ansible.builtin.replace:
+        path: "{{ velo_server_config }}"
+        regexp: 'output_directory:.*'
+        replace: 'output_directory: {{ velo_log_dir }}'
+
+    - name: Patch GUI bind address to 0.0.0.0
+      ansible.builtin.replace:
+        path: "{{ velo_server_config }}"
+        regexp: '(GUI:[\s\S]*?bind_address:)\s*127\.0\.0\.1'
+        replace: '\1 0.0.0.0'
+
+    - name: Set config ownership
+      ansible.builtin.file:
+        path: "{{ velo_server_config }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    # ----------------------------------------------------------------
+    # 5. Install as systemd service (runs as root to avoid ACL issues)
+    # ----------------------------------------------------------------
+    - name: Write Velociraptor server systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/velociraptor_server.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Velociraptor DFIR Server
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart={{ velo_binary }} --config {{ velo_server_config }} frontend -v
+          Restart=on-failure
+          RestartSec=5
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Velociraptor server
+      ansible.builtin.systemd:
+        name: velociraptor_server
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Wait for frontend to be ready on port {{ velo_frontend_port }}
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ velo_frontend_port }}"
+        delay: 5
+        timeout: 60
+
+    # ----------------------------------------------------------------
+    # 6. Add admin user
+    # --password flag avoids the interactive terminal prompt that
+    # causes Ansible to fail with "inappropriate ioctl for device"
+    # ----------------------------------------------------------------
+    - name: Create admin user via expect
+      ansible.builtin.shell: |
+        expect -c "
+          spawn {{ velo_binary }} --config {{ velo_server_config }} user add {{ velo_admin_user }} --role administrator
+          expect \"password:\"
+          send \"{{ velo_admin_password }}\r\"
+          expect \"password:\"
+          send \"{{ velo_admin_password }}\r\"
+          expect eof
+        "
+      ignore_errors: yes
+
+    # ----------------------------------------------------------------
+    # 7. Extract client config and fetch to controller
+    # ----------------------------------------------------------------
+    - name: Generate client config from server config
+      ansible.builtin.shell: >
+        {{ velo_binary }} config client
+        --config {{ velo_server_config }}
+        > {{ velo_client_config }}
+
+    - name: Set client config ownership
+      ansible.builtin.file:
+        path: "{{ velo_client_config }}"
+        owner: root
+        group: root
+        mode: "0640"
+
+    - name: Fetch client config to Ansible controller
+      ansible.builtin.fetch:
+        src: "{{ velo_client_config }}"
+        dest: /tmp/velociraptor-client.config.yaml
+        flat: yes
+
+    # ----------------------------------------------------------------
+    # 8. Summary
+    # ----------------------------------------------------------------
+    - name: Server access info
+      ansible.builtin.debug:
+        msg:
+          - "================================================"
+          - " Velociraptor GUI:  https://{{ velo_server_ip }}:{{ velo_gui_port }}"
+          - " Username: {{ velo_admin_user }}  Password: {{ velo_admin_password }}"
+          - " Agent endpoint: https://{{ velo_server_ip }}:{{ velo_frontend_port }}"
+          - " Client config: /tmp/velociraptor-client.config.yaml (on controller)"
+          - "================================================"

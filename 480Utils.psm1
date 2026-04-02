@@ -427,6 +427,24 @@ function New-FullClone {
 # Retrieves the IP address(es) of a VM via VMware Tools guest info.
 # The VM must be powered on and have VMware Tools running for this to work.
 # An optional -WaitForIP switch will poll until an IP is reported, useful immediately after boot.
+
+# Private helper: returns the first routable IPv4 from a VM view.
+# Guest.IpAddress is checked first; if it is IPv6 or empty (VMware Tools can report
+# a link-local fe80:: address before DHCP assigns a real IP), we fall back to
+# scanning Guest.Net across all NICs for the first IPv4 match.
+function Get-BestIPv4 {
+    param ($vmView)
+    $ipv4Pattern = '^\d{1,3}(\.\d{1,3}){3}$'
+
+    $primary = $vmView.Guest.IpAddress
+    if ($primary -match $ipv4Pattern) { return $primary }
+
+    return $vmView.Guest.Net |
+        ForEach-Object { $_.IpAddress } |
+        Where-Object { $_ -match $ipv4Pattern } |
+        Select-Object -First 1
+}
+
 function Get-VMIPAddress {
     param (
         [string]$VMName,
@@ -449,15 +467,15 @@ function Get-VMIPAddress {
         }
 
         if ($WaitForIP) {
-            Write-Host "[INFO] Waiting for VMware Tools to report an IP (timeout: ${TimeoutSeconds}s)..." -ForegroundColor Yellow
+            Write-Host "[INFO] Waiting for VMware Tools to report an IPv4 address (timeout: ${TimeoutSeconds}s)..." -ForegroundColor Yellow
             $elapsed = 0
             $interval = 5
 
             while ($elapsed -lt $TimeoutSeconds) {
                 $vmView = $vm | Get-View
-                $ip = $vmView.Guest.IpAddress
+                $ip = Get-BestIPv4 -vmView $vmView
 
-                if (-not [string]::IsNullOrWhiteSpace($ip)) {
+                if ($ip) {
                     Write-Host "[OK] VM '$($vm.Name)' IP address: $ip" -ForegroundColor Green
                     return $ip
                 }
@@ -474,10 +492,10 @@ function Get-VMIPAddress {
         else {
             # Immediate check via the VM's guest info view
             $vmView = $vm | Get-View
-            $ip = $vmView.Guest.IpAddress
+            $ip = Get-BestIPv4 -vmView $vmView
 
-            if ([string]::IsNullOrWhiteSpace($ip)) {
-                Write-Host "[WARNING] No IP reported for '$($vm.Name)'. VMware Tools may not be running or the VM may still be booting." -ForegroundColor Yellow
+            if (-not $ip) {
+                Write-Host "[WARNING] No IPv4 reported for '$($vm.Name)'. VMware Tools may not be running or the VM may still be booting." -ForegroundColor Yellow
                 Write-Host "[TIP] Use -WaitForIP to poll until an address is available." -ForegroundColor Cyan
                 return $null
             }
@@ -485,7 +503,9 @@ function Get-VMIPAddress {
             Write-Host "[OK] VM '$($vm.Name)' IP address: $ip" -ForegroundColor Green
 
             # Also report all IPs across all NICs if there are multiple
-            $allIPs = $vmView.Guest.Net | ForEach-Object { $_.IpAddress } | Where-Object { $_ -ne $null }
+            $allIPs = $vmView.Guest.Net |
+                ForEach-Object { $_.IpAddress } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
             if ($allIPs.Count -gt 1) {
                 Write-Host "[INFO] All reported addresses:" -ForegroundColor Cyan
                 $allIPs | ForEach-Object { Write-Host "  - $_" }
@@ -496,6 +516,103 @@ function Get-VMIPAddress {
     }
     catch {
         Write-Host "[ERROR] Failed to get IP address: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+# ===== SET VM SPEC FUNCTION =====
+# Configures CPU, RAM, and optionally disk size on a VM.
+# The VM must be powered off to change hardware specs. If it is running,
+# the function will offer to shut it down gracefully before making changes.
+# Omit any parameter to leave that spec unchanged.
+function Set-VMSpec {
+    param (
+        [string]$VMName,
+        [int]$NumCPU,
+        [int]$MemoryGB,
+        [int]$DiskGB
+    )
+
+    try {
+        if (-not $VMName) {
+            $vm = Select-VM
+            if (-not $vm) { return }
+        }
+        else {
+            $vm = Get-VM -Name $VMName -ErrorAction Stop
+        }
+
+        # Hardware changes require the VM to be powered off
+        if ($vm.PowerState -eq "PoweredOn") {
+            Write-Host "[WARNING] VM '$($vm.Name)' is powered on. It must be shut down to change hardware specs." -ForegroundColor Yellow
+            $confirm = Read-Host "Shut down '$($vm.Name)' now? [y/N]"
+            if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+                Write-Host "[INFO] Cancelled. No changes made." -ForegroundColor Yellow
+                return
+            }
+            Write-Host "[INFO] Shutting down '$($vm.Name)'..." -ForegroundColor Yellow
+            Stop-VMGuest -VM $vm -Confirm:$false -ErrorAction Stop | Out-Null
+
+            # Wait for the VM to fully power off
+            $timeout = 60
+            $elapsed = 0
+            while ((Get-VM -Name $vm.Name).PowerState -ne "PoweredOff" -and $elapsed -lt $timeout) {
+                Start-Sleep -Seconds 5
+                $elapsed += 5
+                Write-Host "[INFO] Waiting for shutdown... ($elapsed/${timeout}s)" -ForegroundColor Yellow
+            }
+            $vm = Get-VM -Name $vm.Name
+            if ($vm.PowerState -ne "PoweredOff") {
+                Write-Host "[ERROR] VM did not power off within ${timeout}s. Aborting." -ForegroundColor Red
+                return
+            }
+        }
+
+        Write-Host "`n=== Applying Spec Changes to '$($vm.Name)' ===" -ForegroundColor Cyan
+
+        # Build Set-VM parameters dynamically so unspecified values are not touched
+        $setVMParams = @{ VM = $vm; ErrorAction = "Stop" }
+
+        if ($NumCPU -gt 0) {
+            Write-Host "[INFO] CPU: $($vm.NumCpu) -> $NumCPU" -ForegroundColor Yellow
+            $setVMParams["NumCpu"] = $NumCPU
+        }
+
+        if ($MemoryGB -gt 0) {
+            Write-Host "[INFO] RAM: $($vm.MemoryGB) GB -> $MemoryGB GB" -ForegroundColor Yellow
+            $setVMParams["MemoryGB"] = $MemoryGB
+        }
+
+        if ($setVMParams.Count -gt 2) {
+            Set-VM @setVMParams -Confirm:$false | Out-Null
+            Write-Host "[OK] CPU/RAM updated." -ForegroundColor Green
+        }
+
+        # Disk resize is handled separately via Set-HardDisk
+        if ($DiskGB -gt 0) {
+            $disk = Get-HardDisk -VM $vm | Select-Object -First 1
+            $currentGB = [math]::Round($disk.CapacityGB)
+            if ($DiskGB -le $currentGB) {
+                Write-Host "[ERROR] New disk size (${DiskGB} GB) must be larger than current size (${currentGB} GB). Shrinking is not supported." -ForegroundColor Red
+            }
+            else {
+                Write-Host "[INFO] Disk: ${currentGB} GB -> ${DiskGB} GB" -ForegroundColor Yellow
+                Set-HardDisk -HardDisk $disk -CapacityGB $DiskGB -Confirm:$false -ErrorAction Stop | Out-Null
+                Write-Host "[OK] Disk resized. Remember to extend the partition inside the guest OS after boot." -ForegroundColor Green
+            }
+        }
+
+        # Show final spec
+        $vm = Get-VM -Name $vm.Name
+        Write-Host "`n=== Final Spec for '$($vm.Name)' ===" -ForegroundColor Cyan
+        Write-Host "  CPU    : $($vm.NumCpu) vCPU(s)"
+        Write-Host "  Memory : $($vm.MemoryGB) GB"
+        Write-Host "  Disk   : $([math]::Round((Get-HardDisk -VM $vm | Select-Object -First 1).CapacityGB)) GB"
+
+        return $vm
+    }
+    catch {
+        Write-Host "[ERROR] Failed to set VM spec: $_" -ForegroundColor Red
         return $null
     }
 }

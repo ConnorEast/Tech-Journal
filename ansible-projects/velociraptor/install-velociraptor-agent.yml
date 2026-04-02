@@ -1,0 +1,120 @@
+---
+# Installs and registers the Velociraptor agent on velociraptor_agents hosts.
+# Supports both Ubuntu/Debian and Rocky/RHEL targets.
+#
+#   ansible-playbook -i inventory.yaml install-velociraptor-agent.yml
+#
+# IMPORTANT: Run install-velociraptor-server.yml first. That play fetches
+# the client config to /tmp/velociraptor-client.config.yaml on the controller,
+# which this play copies to each agent host.
+#
+# Agents connect outbound to https://10.0.5.5:8000 - no inbound ports needed.
+
+- name: Install Velociraptor agent
+  hosts: velociraptor_agents
+  gather_facts: yes
+  become: yes
+
+  vars:
+    velo_version: "v0.76.1"
+    velo_release: "v0.76"
+    # glibc binary for Ubuntu, musl for Rocky/RHEL - selected per OS family below
+    velo_binary_url_glibc: "https://github.com/Velocidex/velociraptor/releases/download/{{ velo_release }}/velociraptor-{{ velo_version }}-linux-amd64"
+    velo_binary_url_musl: "https://github.com/Velocidex/velociraptor/releases/download/{{ velo_release }}/velociraptor-{{ velo_version }}-linux-amd64-musl"
+    velo_binary: "/usr/local/bin/velociraptor"
+    velo_config_dir: "/etc/velociraptor"
+    velo_client_config: "{{ velo_config_dir }}/client.config.yaml"
+    # Path to the client config on the Ansible controller (fetched by server play)
+    velo_client_config_local: "/tmp/velociraptor-client.config.yaml"
+
+  tasks:
+
+    # ----------------------------------------------------------------
+    # 1. Download correct binary for this OS family
+    # ----------------------------------------------------------------
+    - name: Download Velociraptor binary (glibc - Ubuntu/Debian)
+      ansible.builtin.get_url:
+        url: "{{ velo_binary_url_glibc }}"
+        dest: "{{ velo_binary }}"
+        mode: "0755"
+        force: no
+      when: ansible_os_family == "Debian"
+
+    - name: Download Velociraptor binary (musl - Rocky/RHEL)
+      ansible.builtin.get_url:
+        url: "{{ velo_binary_url_musl }}"
+        dest: "{{ velo_binary }}"
+        mode: "0755"
+        force: no
+      when: ansible_os_family == "RedHat"
+
+    # ----------------------------------------------------------------
+    # 2. Deploy client config
+    # ----------------------------------------------------------------
+    - name: Create velociraptor config directory
+      ansible.builtin.file:
+        path: "{{ velo_config_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Copy client config from controller to agent
+      ansible.builtin.copy:
+        src: "{{ velo_client_config_local }}"
+        dest: "{{ velo_client_config }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    # ----------------------------------------------------------------
+    # 3. Install as systemd service
+    # ----------------------------------------------------------------
+    - name: Write Velociraptor client systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/velociraptor_client.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Velociraptor DFIR Client
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart={{ velo_binary }} --config {{ velo_client_config }} client -v
+          Restart=on-failure
+          RestartSec=5
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Velociraptor client
+      ansible.builtin.systemd:
+        name: velociraptor_client
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    # ----------------------------------------------------------------
+    # 4. Verify agent is running and connecting
+    # ----------------------------------------------------------------
+    - name: Check Velociraptor client service status
+      ansible.builtin.command: systemctl status velociraptor_client --no-pager
+      register: client_status
+      changed_when: false
+
+    - name: Show client status
+      ansible.builtin.debug:
+        var: client_status.stdout_lines
+
+    - name: Check agent logs for server connection
+      ansible.builtin.shell: >
+        journalctl -u velociraptor_client --no-pager -n 20
+      register: client_logs
+      changed_when: false
+
+    - name: Show agent connection logs
+      ansible.builtin.debug:
+        var: client_logs.stdout_lines

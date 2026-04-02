@@ -1,0 +1,30 @@
+all:
+  children:
+
+    # ----------------------------------------------------------------
+    # Velociraptor server - blue-siem at 10.0.5.5
+    # ----------------------------------------------------------------
+    velociraptor_server:
+      hosts:
+        blue-siem:
+          ansible_host: 10.0.5.5
+      vars:
+        ansible_user: deployer
+        ansible_become: yes
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
+
+    # ----------------------------------------------------------------
+    # Agent targets - existing BLUE1-LAN systems
+    # ----------------------------------------------------------------
+    velociraptor_agents:
+      hosts:
+        blueU01:
+          ansible_host: 10.0.5.30
+        blueR01:
+          ansible_host: 10.0.5.10
+      vars:
+        ansible_user: deployer
+        ansible_become: yes
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
