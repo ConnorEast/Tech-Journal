@@ -1,0 +1,25 @@
+all:
+  children:
+    servers:
+      hosts:
+        dc-blue1:
+          ansible_host: 10.0.5.6
+          ansible_user: Administrator
+          ansible_connection: ssh
+          ansible_shell_type: powershell
+          ansible_port: 22
+          ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o PreferredAuthentications=password'
+          domain_name: BLUE.local
+          domain_netbios_name: BLUE
+          new_hostname: dc-blue1
+          ous:
+            - name: BLUE-Servers
+              path: "DC=BLUE,DC=local"
+            - name: BLUE-Workstations
+              path: "DC=BLUE,DC=local"
+            - name: BLUE-Users
+              path: "DC=BLUE,DC=local"
+            - name: BLUE-Groups
+              path: "DC=BLUE,DC=local"
+            - name: BLUE-Admins
+              path: "OU=BLUE-Users,DC=BLUE,DC=local"

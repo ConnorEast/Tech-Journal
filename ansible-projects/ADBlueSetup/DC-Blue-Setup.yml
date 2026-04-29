@@ -1,0 +1,100 @@
+---
+- name: Configure dc-blue1 as BLUE.local Domain Controller
+  hosts: servers
+  gather_facts: no
+
+  vars_prompt:
+    - name: ansible_ssh_pass
+      prompt: "SSH password for deployer@dc-blue1"
+      private: yes
+
+    - name: admin_password
+      prompt: "New local Administrator password to set"
+      private: yes
+
+    - name: dsrm_password
+      prompt: "Directory Services Restore Mode (DSRM) password"
+      private: yes
+
+  tasks:
+
+    # -------------------------------------------------------
+    # 1. Set local Administrator password
+    # -------------------------------------------------------
+    - name: Set local Administrator password
+      ansible.builtin.raw: >
+        Set-LocalUser -Name Administrator
+        -Password (ConvertTo-SecureString '{{ admin_password }}' -AsPlainText -Force)
+
+    # -------------------------------------------------------
+    # 2. Set hostname and reboot
+    # -------------------------------------------------------
+    - name: Set hostname
+      ansible.builtin.raw: Rename-Computer -NewName '{{ new_hostname }}' -Force
+
+    - name: Reboot after hostname change
+      ansible.builtin.raw: Restart-Computer -Force
+      ignore_errors: yes
+
+    - name: Wait for dc-blue1 to come back online
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        delay: 15
+        timeout: 300
+      delegate_to: localhost
+
+    # -------------------------------------------------------
+    # 3. Install AD DS feature
+    # -------------------------------------------------------
+    - name: Install AD Domain Services and DNS features
+      ansible.builtin.raw: >
+        Install-WindowsFeature -Name AD-Domain-Services,DNS,RSAT-AD-Tools,RSAT-AD-PowerShell
+        -IncludeManagementTools
+
+    # -------------------------------------------------------
+    # 4. Create new forest / domain
+    # -------------------------------------------------------
+    - name: Create new AD forest BLUE.local
+      ansible.builtin.raw: >
+        Install-ADDSForest
+        -DomainName '{{ domain_name }}'
+        -DomainNetbiosName '{{ domain_netbios_name }}'
+        -SafeModeAdministratorPassword (ConvertTo-SecureString '{{ dsrm_password }}' -AsPlainText -Force)
+        -InstallDns
+        -Force
+      register: domain_install
+      ignore_errors: yes
+
+    - name: Reboot after domain promotion
+      ansible.builtin.raw: Restart-Computer -Force
+      ignore_errors: yes
+
+    - name: Wait for dc-blue1 to come back after domain promotion
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        delay: 60
+        timeout: 600
+      delegate_to: localhost
+
+    - name: Additional wait for AD services to fully initialize
+      ansible.builtin.pause:
+        seconds: 680
+
+    # -------------------------------------------------------
+    # 5. Create OU structure
+    # -------------------------------------------------------
+    - name: Create OU structure in BLUE.local
+      ansible.builtin.raw: >
+        New-ADOrganizationalUnit -Name '{{ item.name }}'
+        -Path '{{ item.path }}'
+        -ProtectedFromAccidentalDeletion $false
+        -ErrorAction SilentlyContinue
+      loop: "{{ ous }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Show domain install result
+      ansible.builtin.debug:
+        msg: "{{ domain_install.stdout | default('Domain install complete') }}"

@@ -154,7 +154,7 @@ function New-LinkedClone {
         if (-not $SnapshotName) {
             $SnapshotName = $config.base_snapshot
         }
-        $snapshot = Get-Snapshot -VM $vm -Name $SnapshotName -ErrorAction Stop
+        $snapshot = Get-Snapshot -VM $vm -Name $SnapshotName -ErrorAction Stop | Select-Object -First 1
 
         Write-Host "`n=== Creating Linked Clone ===" -ForegroundColor Cyan
         Write-Host "Source VM: $($vm.Name)"
@@ -386,7 +386,7 @@ function New-FullClone {
         if (-not $SnapshotName) {
             $SnapshotName = $config.base_snapshot
         }
-        $snapshot = Get-Snapshot -VM $vm -Name $SnapshotName -ErrorAction Stop
+        $snapshot = Get-Snapshot -VM $vm -Name $SnapshotName -ErrorAction Stop | Select-Object -First 1
 
         Write-Host "`n=== Creating Full Clone ===" -ForegroundColor Cyan
         Write-Host "Source VM: $($vm.Name)"
@@ -613,6 +613,95 @@ function Set-VMSpec {
     }
     catch {
         Write-Host "[ERROR] Failed to set VM spec: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
+# ===== SET WINDOWS STATIC IP FUNCTION =====
+# Uses Invoke-VMScript (PowerCLI) to run netsh commands inside the guest OS.
+# This avoids needing SSH or WinRM — only VMware Tools must be running.
+#
+# Parameters
+#   -VMName        : Name of the target VM in vCenter
+#   -InterfaceName : Guest NIC name as seen by Windows (default "Ethernet0")
+#   -IPAddress     : Static IPv4 address to assign
+#   -SubnetMask    : Subnet mask  (e.g. 255.255.255.0)
+#   -Gateway       : Default gateway (e.g. 10.0.5.2)
+#   -DNS           : Primary DNS server (e.g. 10.0.5.5)
+#   -GuestUser     : Local/domain account inside the guest (e.g. "deployer")
+#   -GuestPassword : SecureString — callers should pass (Read-Host -AsSecureString)
+#                    The plain-text value is extracted only long enough to be
+#                    passed to Invoke-VMScript and is never written to disk.
+function Set-WindowsIP {
+    param (
+        [Parameter(Mandatory)]
+        [string]$VMName,
+
+        [string]$InterfaceName = "Ethernet0",
+
+        [Parameter(Mandatory)]
+        [string]$IPAddress,
+
+        [string]$SubnetMask = "255.255.255.0",
+
+        [Parameter(Mandatory)]
+        [string]$Gateway,
+
+        [Parameter(Mandatory)]
+        [string]$DNS,
+
+        [Parameter(Mandatory)]
+        [string]$GuestUser,
+
+        [Parameter(Mandatory)]
+        [System.Security.SecureString]$GuestPassword
+    )
+
+    try {
+        # Resolve the VM object
+        $vm = Get-VM -Name $VMName -ErrorAction Stop
+
+        if ($vm.PowerState -ne "PoweredOn") {
+            Write-Host "[ERROR] VM '$VMName' is not powered on. Start it first." -ForegroundColor Red
+            return $null
+        }
+
+        # Safely extract the plain-text password from the SecureString
+        # only for the duration of this function call.
+        $plainPassword = [System.Net.NetworkCredential]::new("", $GuestPassword).Password
+
+        # Build the two netsh commands as a single cmd.exe script block.
+        # netsh interface ip set address — sets IP, mask, and gateway in one call.
+        # netsh interface ip set dns     — sets the primary DNS server.
+        $scriptText = @"
+netsh interface ip set address name="$InterfaceName" static $IPAddress $SubnetMask $Gateway
+netsh interface ip set dns name="$InterfaceName" static $DNS
+"@
+
+        Write-Host "`n=== Setting Static IP on '$VMName' ===" -ForegroundColor Cyan
+        Write-Host "  Interface : $InterfaceName"
+        Write-Host "  IP        : $IPAddress"
+        Write-Host "  Mask      : $SubnetMask"
+        Write-Host "  Gateway   : $Gateway"
+        Write-Host "  DNS       : $DNS"
+        Write-Host "[INFO] Running netsh via Invoke-VMScript..." -ForegroundColor Yellow
+
+        $result = Invoke-VMScript `
+            -VM $vm `
+            -ScriptText $scriptText `
+            -GuestUser $GuestUser `
+            -GuestPassword $plainPassword `
+            -ScriptType Bat `
+            -ErrorAction Stop
+
+        Write-Host "[OK] Static IP configured on '$VMName'." -ForegroundColor Green
+        if ($result.ScriptOutput) {
+            Write-Host "[OUTPUT] $($result.ScriptOutput)" -ForegroundColor Gray
+        }
+        return $result
+    }
+    catch {
+        Write-Host "[ERROR] Failed to set Windows IP: $_" -ForegroundColor Red
         return $null
     }
 }
